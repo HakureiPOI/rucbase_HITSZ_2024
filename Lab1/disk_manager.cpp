@@ -123,10 +123,14 @@ void DiskManager::create_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_CREAT模式
     // 注意不能重复创建相同文件
-    std::string cmd = "mkdir " + path;
-    if (system(cmd.c_str()) < 0) {  // 创建一个名为path的目录
+    if(this->is_file(path)) {  //判断文件是否已经存在，调用上方函数
+        throw FileExistsError(path);
+    }
+    int fd = open(path.c_str(), O_CREAT | O_RDWR, 0666); //path.c_str()将std::string转换为const char*，传入O_CREAT标志位可以创建文件，添加O_RDWR标志位允许读写权限，设置文件模式为0666表示任何用户都有读写权限。
+    if(fd == -1) {
         throw UnixError();
     }
+    close(fd);
 }
 
 /**
@@ -137,8 +141,13 @@ void DiskManager::destroy_file(const std::string &path) {
     // Todo:
     // 调用unlink()函数
     // 注意不能删除未关闭的文件
-    std::string cmd = "rm -r " + path;
-    if (system(cmd.c_str()) < 0) {
+    if(!this->is_file(path)) {  //是否存在
+        throw FileNotFoundError(path);
+    }
+    if(this->path2fd_.count(path)) {  //是否未关闭
+        throw FileNotClosedError(path);
+    }
+    if(unlink(path.c_str()) < 0) {
         throw UnixError();
     }
 }
