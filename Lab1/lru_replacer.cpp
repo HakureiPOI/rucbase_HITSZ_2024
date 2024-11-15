@@ -11,9 +11,9 @@ See the Mulan PSL v2 for more details. */
 #include "lru_replacer.h"
 #include <algorithm>
 
-LRUReplacer::LRUReplacer(size_t num_pages) { max_size_ = num_pages; }
+LRUReplacer::LRUReplacer(size_t num_pages) : max_size_(num_pages) {}
 
-LRUReplacer::~LRUReplacer() = default;  
+LRUReplacer::~LRUReplacer() = default;
 
 /**
  * @description: 使用LRU策略删除一个victim frame，并返回该frame的id
@@ -22,38 +22,34 @@ LRUReplacer::~LRUReplacer() = default;
  */
 bool LRUReplacer::victim(frame_id_t* frame_id) {
     // C++17 std::scoped_lock
-    // 它能够避免死锁发生，其构造函数能够自动进行上锁操作，析构函数会对互斥量进行解锁操作，保证线程安全。
-    std::scoped_lock lock{latch_};  //  如果编译报错可以替换成其他lock
+    // 它能够避免死锁发生，其构造函数能够自动进行上锁操作，析构函数会对互斧量进行解锁操作，保证线程安全。
+    std::scoped_lock lock{latch_};
 
-    // Todo:
-    //  利用lru_replacer中的LRUlist_,LRUHash_实现LRU策略
-    //  选择合适的frame指定为淘汰页面,赋值给*frame_id
-    if(LRUlist_.empty()){
-        frame_id = nullptr;
+    // 判断LRUlist_是否为空
+    if (LRUlist_.empty()) {
+        *frame_id = INVALID_FRAME_ID;
         return false;
     }
-    else{
-        *frame_id = LRUlist_.back();
-        LRUlist_.pop_back();
-        LRUhash_.erase(*frame_id);
-        return true;
-    }
+    // 移除最久未用的frame，更新frame_id
+    *frame_id = LRUlist_.back();
+    LRUlist_.pop_back();
+    LRUhash_.erase(*frame_id);
+    return true;
 }
 
 /**
  * @description: 固定指定的frame，即该页面无法被淘汰
- * @param {frame_id_t} 需要固定的frame的id
+ * @param {frame_id_t} frame_id 需要固定的frame的id
  */
 void LRUReplacer::pin(frame_id_t frame_id) {
     std::scoped_lock lock{latch_};
-    // Todo:
-    // 固定指定id的frame
-    // 在数据结构中移除该frame
-    if(std::find(LRUlist_.begin(), LRUlist_.end(), frame_id) != LRUlist_.end()){
-        LRUlist_.erase(LRUhash_[frame_id]);
-        LRUhash_.erase(frame_id);
+
+    // 如果frame在LRUlist_中，削除它并更新相关数据
+    auto it = LRUhash_.find(frame_id);
+    if (it != LRUhash_.end()) {
+        LRUlist_.erase(it->second);
+        LRUhash_.erase(it);
     }
-    return;
 }
 
 /**
@@ -61,25 +57,20 @@ void LRUReplacer::pin(frame_id_t frame_id) {
  * @param {frame_id_t} frame_id 取消固定的frame的id
  */
 void LRUReplacer::unpin(frame_id_t frame_id) {
-    // Todo:
-    //  支持并发锁
-    //  选择一个frame取消固定
+    std::scoped_lock lock{latch_};
 
-    // std::scoped_lock lock{latch_}; //悲观锁
-
-    if(std::find(LRUlist_.begin(), LRUlist_.end(), frame_id) == LRUlist_.end()){
-        // 如果该frame已经是unpin状态，就不需要再更新
-        std::list<frame_id_t>::iterator it;
-        {
-            std::unique_lock<std::mutex> lock(latch_);
-            it = LRUlist_.insert(LRUlist_.begin(), frame_id);
-            LRUhash_[frame_id] = it;
-        }
+    // 如果frame不在LRUlist_中，将它添加到最前方
+    if (LRUhash_.find(frame_id) == LRUhash_.end()) {
+        LRUlist_.push_front(frame_id);
+        LRUhash_[frame_id] = LRUlist_.begin();
     }
-    return ;
 }
 
 /**
  * @description: 获取当前replacer中可以被淘汰的页面数量
+ * @return {size_t} 可淘汰的页面数量
  */
-size_t LRUReplacer::Size() { return LRUlist_.size(); }
+size_t LRUReplacer::Size() {
+    std::scoped_lock lock{latch_};
+    return LRUlist_.size();
+}
