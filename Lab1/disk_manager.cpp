@@ -57,7 +57,17 @@ void DiskManager::read_page(int fd, page_id_t page_no, char *offset, int num_byt
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用read()函数
     // 注意read返回值与num_bytes不等时，throw InternalError("DiskManager::read_page Error");
+    int flags = fcntl(fd, F_GETFD);  //fd是否可用
+    if (flags == -1) {
+        throw UnixError();
+    }
 
+    if(lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {  //定位读写指针
+        throw UnixError();
+    }
+    if(read(fd, offset, num_bytes) == -1) { //读文件
+        throw UnixError();
+    }
 }
 
 /**
@@ -113,6 +123,10 @@ void DiskManager::create_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_CREAT模式
     // 注意不能重复创建相同文件
+    std::string cmd = "mkdir " + path;
+    if (system(cmd.c_str()) < 0) {  // 创建一个名为path的目录
+        throw UnixError();
+    }
 }
 
 /**
@@ -123,7 +137,10 @@ void DiskManager::destroy_file(const std::string &path) {
     // Todo:
     // 调用unlink()函数
     // 注意不能删除未关闭的文件
-    
+    std::string cmd = "rm -r " + path;
+    if (system(cmd.c_str()) < 0) {
+        throw UnixError();
+    }
 }
 
 
@@ -136,7 +153,19 @@ int DiskManager::open_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_RDWR模式
     // 注意不能重复打开相同文件，并且需要更新文件打开列表
-
+    if(this->path2fd_.count(path)) {  // 已打开则不重复打开
+        throw FileNotClosedError(path);
+    }
+    if(!this->is_file(path)) { // path是否正确
+        throw FileNotFoundError(path);
+    }
+    int fd = open(path.c_str(), O_RDWR);
+    if(fd < 0) {
+        throw UnixError();
+    }
+    this->path2fd_[path] = fd;  //更新映射
+    this->fd2path_[fd] = path;
+    return fd;
 }
 
 /**
@@ -147,7 +176,23 @@ void DiskManager::close_file(int fd) {
     // Todo:
     // 调用close()函数
     // 注意不能关闭未打开的文件，并且需要更新文件打开列表
+    if(!this->fd2path_.count(fd)) { // 未打开则不关闭
+        throw FileNotOpenError(fd);
+        return;
+    }
+    if(close(fd) == -1) {
+        throw UnixError();
+        return;
+    }
+    auto it1 = path2fd_.find(this->GetFileName(fd)); //删除path2fd中相应的映射
+    if (it1 != path2fd_.end()) {
+        path2fd_.erase(it1);
+    }
 
+    auto it2 = fd2path_.find(fd); //删除fd2path中相应的映射
+    if (it2 != fd2path_.end()) {
+        fd2path_.erase(it2);
+    }
 }
 
 
