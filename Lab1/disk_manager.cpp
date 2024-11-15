@@ -14,6 +14,9 @@ See the Mulan PSL v2 for more details. */
 #include <string.h>    // for memset
 #include <sys/stat.h>  // for stat
 #include <unistd.h>    // for lseek
+#include <cerrno>
+#include <iostream>
+using namespace std;
 
 #include "defs.h"
 
@@ -31,18 +34,12 @@ void DiskManager::write_page(int fd, page_id_t page_no, const char *offset, int 
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用write()函数
     // 注意write返回值与num_bytes不等时 throw InternalError("DiskManager::write_page Error");
-    int flags = fcntl(fd, F_GETFD);  //fd是否可用
-    if (flags == -1) {
-        throw UnixError();
+    lseek(fd,page_no*PAGE_SIZE,SEEK_SET);
+    int ret = write(fd,offset,num_bytes);
+    if(ret!=num_bytes){
+        throw InternalError("DiskManager::write_page Error");
     }
-
-    if(lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {  //定位读写指针
-        throw UnixError();
-    }
-    if(write(fd, offset, num_bytes) != num_bytes) { //写文件
-        throw UnixError();
-    }
-
+    return;
 }
 
 /**
@@ -57,17 +54,14 @@ void DiskManager::read_page(int fd, page_id_t page_no, char *offset, int num_byt
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用read()函数
     // 注意read返回值与num_bytes不等时，throw InternalError("DiskManager::read_page Error");
-    int flags = fcntl(fd, F_GETFD);  //fd是否可用
-    if (flags == -1) {
+    if(lseek(fd,page_no*PAGE_SIZE,SEEK_SET) == -1){
         throw UnixError();
     }
-
-    if(lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {  //定位读写指针
-        throw UnixError();
+    int ret = read(fd,offset,num_bytes);
+    if(ret!=num_bytes){
+        throw InternalError("DiskManager::read_page Error");
     }
-    if(read(fd, offset, num_bytes) == -1) { //读文件
-        throw UnixError();
-    }
+    return;
 }
 
 /**
@@ -123,14 +117,13 @@ void DiskManager::create_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_CREAT模式
     // 注意不能重复创建相同文件
-    if(this->is_file(path)) {  //判断文件是否已经存在，调用上方函数
+    if(!is_file(path)){
+        open(path.c_str(),O_CREAT | O_RDWR,0666); //TODO: IS 0666 CORRECT?
+    }
+    else{
         throw FileExistsError(path);
     }
-    int fd = open(path.c_str(), O_CREAT | O_RDWR, 0666); //path.c_str()将std::string转换为const char*，传入O_CREAT标志位可以创建文件，添加O_RDWR标志位允许读写权限，设置文件模式为0666表示任何用户都有读写权限。
-    if(fd == -1) {
-        throw UnixError();
-    }
-    close(fd);
+    return;
 }
 
 /**
@@ -141,15 +134,17 @@ void DiskManager::destroy_file(const std::string &path) {
     // Todo:
     // 调用unlink()函数
     // 注意不能删除未关闭的文件
-    if(!this->is_file(path)) {  //是否存在
+    auto found = path2fd_.find(path);
+    if(!is_file(path)){
+        // 文件不存在
         throw FileNotFoundError(path);
     }
-    if(this->path2fd_.count(path)) {  //是否未关闭
+    else if(found != path2fd_.end()){
+        // 文件未关闭
         throw FileNotClosedError(path);
     }
-    if(unlink(path.c_str()) < 0) {
-        throw UnixError();
-    }
+    unlink(path.c_str());
+    return;
 }
 
 
@@ -162,19 +157,18 @@ int DiskManager::open_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_RDWR模式
     // 注意不能重复打开相同文件，并且需要更新文件打开列表
-    if(this->path2fd_.count(path)) {  // 已打开则不重复打开
-        throw FileNotClosedError(path);
-    }
-    if(!this->is_file(path)) { // path是否正确
+    auto found = path2fd_.find(path);
+    if(!is_file(path)){
         throw FileNotFoundError(path);
     }
-    int fd = open(path.c_str(), O_RDWR);
-    if(fd < 0) {
-        throw UnixError();
+    else if(found != path2fd_.end()){
+        // file open already
+        throw FileNotClosedError(path);
     }
-    this->path2fd_[path] = fd;  //更新映射
-    this->fd2path_[fd] = path;
-    return fd;
+    int ret = open(path.c_str(),O_RDWR);
+    path2fd_[path] = ret;
+    fd2path_[ret]  = path;
+    return ret;
 }
 
 /**
@@ -185,23 +179,17 @@ void DiskManager::close_file(int fd) {
     // Todo:
     // 调用close()函数
     // 注意不能关闭未打开的文件，并且需要更新文件打开列表
-    if(!this->fd2path_.count(fd)) { // 未打开则不关闭
+    auto found = fd2path_.find(fd);
+    if(found != fd2path_.end()){
+        // 文件打开
+        close(fd);
+        path2fd_.erase(found->second);
+        fd2path_.erase(fd);
+    }
+    else{
         throw FileNotOpenError(fd);
-        return;
     }
-    if(close(fd) == -1) {
-        throw UnixError();
-        return;
-    }
-    auto it1 = path2fd_.find(this->GetFileName(fd)); //删除path2fd中相应的映射
-    if (it1 != path2fd_.end()) {
-        path2fd_.erase(it1);
-    }
-
-    auto it2 = fd2path_.find(fd); //删除fd2path中相应的映射
-    if (it2 != fd2path_.end()) {
-        fd2path_.erase(it2);
-    }
+    return;
 }
 
 
