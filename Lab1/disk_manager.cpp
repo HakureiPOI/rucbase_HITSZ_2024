@@ -34,12 +34,13 @@ void DiskManager::write_page(int fd, page_id_t page_no, const char *offset, int 
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用write()函数
     // 注意write返回值与num_bytes不等时 throw InternalError("DiskManager::write_page Error");
-    lseek(fd,page_no*PAGE_SIZE,SEEK_SET);
-    int ret = write(fd,offset,num_bytes);
-    if(ret!=num_bytes){
+    if (lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {
+        throw UnixError();
+    }
+    ssize_t bytes_written = write(fd, offset, num_bytes);
+    if (bytes_written != num_bytes) {
         throw InternalError("DiskManager::write_page Error");
     }
-    return;
 }
 
 /**
@@ -54,14 +55,13 @@ void DiskManager::read_page(int fd, page_id_t page_no, char *offset, int num_byt
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用read()函数
     // 注意read返回值与num_bytes不等时，throw InternalError("DiskManager::read_page Error");
-    if(lseek(fd,page_no*PAGE_SIZE,SEEK_SET) == -1){
+    if (lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {
         throw UnixError();
     }
-    int ret = read(fd,offset,num_bytes);
-    if(ret!=num_bytes){
+    ssize_t bytes_read = read(fd, offset, num_bytes);
+    if (bytes_read != num_bytes) {
         throw InternalError("DiskManager::read_page Error");
     }
-    return;
 }
 
 /**
@@ -85,7 +85,7 @@ bool DiskManager::is_dir(const std::string& path) {
 void DiskManager::create_dir(const std::string &path) {
     // Create a subdirectory
     std::string cmd = "mkdir " + path;
-    if (system(cmd.c_str()) < 0) {  // 创建一个名为path的目录
+    if (system(cmd.c_str()) < 0) {
         throw UnixError();
     }
 }
@@ -103,7 +103,6 @@ void DiskManager::destroy_dir(const std::string &path) {
  * @param {string} &path 指定路径文件
  */
 bool DiskManager::is_file(const std::string &path) {
-    // 用struct stat获取文件信息
     struct stat st;
     return stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
@@ -117,13 +116,15 @@ void DiskManager::create_file(const std::string &path) {
     // Todo:
     // 调用open()函数，使用O_CREAT模式
     // 注意不能重复创建相同文件
-    if(!is_file(path)){
-        open(path.c_str(),O_CREAT | O_RDWR,0666); //TODO: IS 0666 CORRECT?
-    }
-    else{
+    if (!is_file(path)) {
+        int fd = open(path.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd == -1) {
+            throw UnixError();
+        }
+        close(fd);
+    } else {
         throw FileExistsError(path);
     }
-    return;
 }
 
 /**
@@ -135,18 +136,15 @@ void DiskManager::destroy_file(const std::string &path) {
     // 调用unlink()函数
     // 注意不能删除未关闭的文件
     auto found = path2fd_.find(path);
-    if(!is_file(path)){
-        // 文件不存在
+    if (!is_file(path)) {
         throw FileNotFoundError(path);
-    }
-    else if(found != path2fd_.end()){
-        // 文件未关闭
+    } else if (found != path2fd_.end()) {
         throw FileNotClosedError(path);
     }
-    unlink(path.c_str());
-    return;
+    if (unlink(path.c_str()) == -1) {
+        throw UnixError();
+    }
 }
-
 
 /**
  * @description: 打开指定路径文件 
@@ -158,17 +156,18 @@ int DiskManager::open_file(const std::string &path) {
     // 调用open()函数，使用O_RDWR模式
     // 注意不能重复打开相同文件，并且需要更新文件打开列表
     auto found = path2fd_.find(path);
-    if(!is_file(path)){
+    if (!is_file(path)) {
         throw FileNotFoundError(path);
-    }
-    else if(found != path2fd_.end()){
-        // file open already
+    } else if (found != path2fd_.end()) {
         throw FileNotClosedError(path);
     }
-    int ret = open(path.c_str(),O_RDWR);
-    path2fd_[path] = ret;
-    fd2path_[ret]  = path;
-    return ret;
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd == -1) {
+        throw UnixError();
+    }
+    path2fd_[path] = fd;
+    fd2path_[fd] = path;
+    return fd;
 }
 
 /**
@@ -180,18 +179,16 @@ void DiskManager::close_file(int fd) {
     // 调用close()函数
     // 注意不能关闭未打开的文件，并且需要更新文件打开列表
     auto found = fd2path_.find(fd);
-    if(found != fd2path_.end()){
-        // 文件打开
-        close(fd);
+    if (found != fd2path_.end()) {
+        if (close(fd) == -1) {
+            throw UnixError();
+        }
         path2fd_.erase(found->second);
         fd2path_.erase(fd);
-    }
-    else{
+    } else {
         throw FileNotOpenError(fd);
     }
-    return;
 }
-
 
 /**
  * @description: 获得文件的大小
@@ -200,8 +197,10 @@ void DiskManager::close_file(int fd) {
  */
 int DiskManager::get_file_size(const std::string &file_name) {
     struct stat stat_buf;
-    int rc = stat(file_name.c_str(), &stat_buf);
-    return rc == 0 ? stat_buf.st_size : -1;
+    if (stat(file_name.c_str(), &stat_buf) == -1) {
+        throw UnixError();
+    }
+    return stat_buf.st_size;
 }
 
 /**
@@ -228,7 +227,6 @@ int DiskManager::get_file_fd(const std::string &file_name) {
     return path2fd_[file_name];
 }
 
-
 /**
  * @description:  读取日志文件内容
  * @return {int} 返回读取的数据量，若为-1说明读取数据的起始位置超过了文件大小
@@ -237,7 +235,6 @@ int DiskManager::get_file_fd(const std::string &file_name) {
  * @param {int} offset 读取的内容在文件中的位置
  */
 int DiskManager::read_log(char *log_data, int size, int offset) {
-    // read log file from the previous end
     if (log_fd_ == -1) {
         log_fd_ = open_file(LOG_FILE_NAME);
     }
@@ -247,13 +244,16 @@ int DiskManager::read_log(char *log_data, int size, int offset) {
     }
 
     size = std::min(size, file_size - offset);
-    if(size == 0) return 0;
-    lseek(log_fd_, offset, SEEK_SET);
+    if (size == 0) return 0;
+    if (lseek(log_fd_, offset, SEEK_SET) == -1) {
+        throw UnixError();
+    }
     ssize_t bytes_read = read(log_fd_, log_data, size);
-    assert(bytes_read == size);
+    if (bytes_read != size) {
+        throw UnixError();
+    }
     return bytes_read;
 }
-
 
 /**
  * @description: 写日志内容
@@ -264,11 +264,11 @@ void DiskManager::write_log(char *log_data, int size) {
     if (log_fd_ == -1) {
         log_fd_ = open_file(LOG_FILE_NAME);
     }
-
-    // write from the file_end
-    lseek(log_fd_, 0, SEEK_END);
-    ssize_t bytes_write = write(log_fd_, log_data, size);
-    if (bytes_write != size) {
+    if (lseek(log_fd_, 0, SEEK_END) == -1) {
+        throw UnixError();
+    }
+    ssize_t bytes_written = write(log_fd_, log_data, size);
+    if (bytes_written != size) {
         throw UnixError();
     }
 }
