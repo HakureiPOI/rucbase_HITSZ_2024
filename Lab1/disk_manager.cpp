@@ -31,6 +31,17 @@ void DiskManager::write_page(int fd, page_id_t page_no, const char *offset, int 
     // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
     // 2.调用write()函数
     // 注意write返回值与num_bytes不等时 throw InternalError("DiskManager::write_page Error");
+    int flags = fcntl(fd, F_GETFD);  //fd是否可用
+    if (flags == -1) {
+        throw UnixError();
+    }
+
+    if(lseek(fd, page_no * PAGE_SIZE, SEEK_SET) == -1) {  //定位读写指针
+        throw UnixError();
+    }
+    if(write(fd, offset, num_bytes) != num_bytes) { //写文件
+        throw UnixError();
+    }
 
 }
 
