@@ -61,19 +61,24 @@ Rid RmFileHandle::insert_record(char* buf, Context* context) {
  * @param {Rid&} rid 要插入记录的位置
  * @param {char*} buf 要插入记录的数据
  */
-void RmFileHandle::insert_record(const Rid& rid, char* buf, Context* context) {
-    // NEED REVISIT
-    //  这个函数是不是从来没被调用过
+void RmFileHandle::insert_record(const Rid& rid, char* buf) {
+    // 获取页面句柄
     RmPageHandle page_handle = fetch_page_handle(rid.page_no);
+    // 获取指定 slot 的地址
     char* obj_slot = page_handle.get_slot(rid.slot_no);
+    // 将记录数据拷贝到 slot 中
     memcpy(obj_slot, buf, file_hdr_.record_size);
+    // 更新页面的 bitmap
     Bitmap::set(page_handle.bitmap, rid.slot_no);
+    // 增加记录计数
     page_handle.page_hdr->num_records++;
+    // 如果该页的记录已满，更新文件头中的 first_free_page_no
     if (page_handle.page_hdr->num_records >= file_hdr_.num_records_per_page) {
         file_hdr_.first_free_page_no = page_handle.page_hdr->next_free_page_no;
     }
-    return;
+    return; // 无返回值
 }
+
 
 /**
  * @description: 删除记录文件中记录号为rid的记录
